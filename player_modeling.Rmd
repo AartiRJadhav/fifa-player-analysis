@@ -1,0 +1,514 @@
+---
+title: "FIFA 20 Predicting Player Value + Work-Rate"
+author: "Akshit Jain"
+date: "3/28/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(purrr)
+library(tibble)
+library(data.table)
+
+library(leaps)
+library(glmnet)
+library(rsample)
+library(randomForest)
+library(caret)
+library(ROSE)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+fifa20 <- fread("~/Desktop/Northeastern-University/SML/FIFA-Player-Assessment-Model-and-Analytics/Datasets/players_20.csv")
+fifa20 <- as_tibble(fifa20)
+```
+
+# Data cleaning for player value regression
+
+```{r}
+# remove columns that are not required for predicting player value
+value_fifa20 <- fifa20 %>% dplyr::select(-player_url, -long_name, -dob, -real_face, -player_tags, 
+                                    -loaned_from, -joined, -player_positions, -contract_valid_until,
+                                    -nation_position, -nation_jersey_number, -player_traits, -gk_diving,
+                                    -gk_handling, -gk_kicking, -gk_reflexes, -gk_speed, -gk_positioning,
+                                    -goalkeeping_diving, -goalkeeping_handling, -goalkeeping_kicking,
+                                    -goalkeeping_positioning, -goalkeeping_reflexes, 
+                                    -ls, -st, -rs, -lw, -lf, -cf, -rf, -rw, -lam, -cam, -ram, 
+                                    -lm, -lcm, -cm, -rcm, -rm, -lwb, -ldm, -cdm, -rdm, -rwb, 
+                                    -lb, -lcb, -cb, -rcb, -rb)
+
+# remove oberservations that have missing values (NOT processing Goalkeepers)
+value_fifa20 <- na.omit(value_fifa20)
+value_fifa20
+```
+
+```{r}
+# filter categorical variables with several classes
+value_df <- value_fifa20 %>% dplyr::select(-short_name, -nationality, -club, -body_type, 
+                                    -team_jersey_number, -team_position)
+```
+
+# Fit a linear model for player value
+```{r}
+value.fit <- lm(value_eur ~., data=value_df)
+summary(value.fit)
+names(value.fit)
+```
+
+# Exploring predictors that have a significant impact on player value
+```{r}
+
+# overall rating vs. value
+fit_overall <- lm(log(value_eur) ~ overall, data = value_df)
+summary(fit_overall)
+
+value_df %>% ggplot(aes(x=overall,y=log(value_eur))) +
+  geom_point() + geom_smooth(method='lm', formula = y~x) +
+  labs(x="player rating", title = "Plot of rating vs. player value")
+
+# potential vs. value
+fit_potential <- lm(log(value_eur) ~ potential, data = value_df)
+summary(fit_potential)
+
+value_df %>% ggplot(aes(x=potential,y=log(value_eur))) +
+  geom_point() + geom_smooth(method='lm', formula= y~x) +
+  labs(x="player potential", title = "Plot of potential vs. player value")
+
+# weekly wage_eur vs. value
+fit_wage <- lm(value_eur ~ wage_eur, data = value_df)
+summary(fit_wage)
+
+value_df %>% ggplot(aes(x=wage_eur,y=value_eur)) +
+  geom_point() + geom_smooth(method='lm', formula= y~x)
+
+# release_clause_eur vs. value
+fit_rc <- lm(value_eur ~ release_clause_eur, data = value_df)
+summary(fit_rc)
+
+value_df %>% ggplot(aes(x=release_clause_eur,y=value_eur)) +
+  geom_point() + geom_smooth(method='lm', formula= y~x)
+
+# attacking_volleys vs. value
+fit_av <- lm(log(value_eur) ~ attacking_volleys, data = value_df)
+summary(fit_av)
+
+value_df %>% ggplot(aes(x=attacking_volleys,y=log(value_eur))) +
+  geom_point() + geom_smooth(method='lm', formula= y~x)
+```
+
+# Feature Selection: Forward Stepwise Selection
+```{r}
+valuefit.fwd=regsubsets(value_eur ~., value_df, method="forward", nvmax = 19)
+valuefit.summary <- summary(valuefit.fwd)
+valuefit.summary
+```
+
+```{r}
+par(mfrow=c(2,2))
+
+plot(valuefit.summary$rss,xlab="Number of Variables",ylab="RSS",type="l")
+
+plot(valuefit.summary$adjr2,xlab="Number of Variables",ylab="Adjusted RSq",type="l")
+which.max(valuefit.summary$adjr2)
+points(8,valuefit.summary$adjr2[8], col="red",cex=2,pch=20)
+
+plot(valuefit.summary$cp,xlab="Number of Variables",ylab="Cp",type='l')
+which.min(valuefit.summary$cp)
+points(8,valuefit.summary$cp[8],col="red",cex=2,pch=20)
+
+which.min(valuefit.summary$bic)
+plot(valuefit.summary$bic,xlab="Number of Variables",ylab="BIC",type='l')
+points(8,valuefit.summary$bic[8],col="red",cex=2,pch=20)
+
+```
+
+```{r}
+plot(valuefit.fwd,scale="r2")
+plot(valuefit.fwd,scale="adjr2")
+plot(valuefit.fwd,scale="Cp")
+plot(valuefit.fwd,scale="bic")
+```
+
+# Model Assessment: Choosing Among Models using K-fold Cross-Validation 
+
+```{r}
+value_df <- value_df %>% mutate_if(is.numeric, scale);
+value_df
+```
+
+```{r}
+predict.regsubsets=function(object,newdata,id,...){
+  form=as.formula(object$call[[2]])
+  mat=model.matrix(form,newdata)
+  coefi=coef(object,id=id)
+  xvars=names(coefi)
+  mat[,xvars]%*%coefi
+  }
+```
+
+```{r}
+k = 10
+set.seed(1)
+folds = sample(1:k, nrow(value_df), replace = TRUE)
+cv.errors = matrix(NA, k, 19, dimnames = list(NULL, paste(1:19)))
+```
+
+```{r}
+for (j in 1:k) {
+  fwd.fit = regsubsets(value_eur ~ ., data = value_df[folds != j, ], method = 'forward', nvmax = 19)
+  for (i in 1:19) {
+    pred = predict(fwd.fit, value_df[folds == j, ], id=i)
+    cv.errors[j,i] = mean( (value_df$value_eur[folds==j] - pred)^2 )
+  }
+}
+```
+
+```{r}
+mean.cv.errors = apply(cv.errors, 2, mean)
+mean.cv.errors
+par(mfrow=c(1,1))
+plot(mean.cv.errors, type='b', main = "Forward Stepwise Selection: Number of variables")
+```
+
+```{r}
+valuefit.final = regsubsets(value_eur ~ ., data = value_df, method = 'forward', nvmax = 19)
+coef(valuefit.final, 8)
+```
+
+```{r}
+dim(value_df)
+```
+
+# Model Evaluation: Fit a linear model with top 8 feaatures from Forward Stepwise Selection
+
+```{r}
+# convert categorical variables to factor
+value_df$preferred_foot = as.factor(value_df$preferred_foot)
+value_df$work_rate = as.factor(value_df$work_rate)
+```
+
+```{r}
+# Create Train/Test split to make predictions for player value
+set.seed(1)
+value.split = initial_split(value_df, prop = 0.7)
+train_data = training(value.split)
+test_data = testing(value.split)
+#train = sample(c(TRUE,FALSE), nrow(value_df), replace = TRUE)
+#test = (!train)
+```
+
+```{r}
+# Fit a linear model to train data
+lm.fit.value = lm(value_eur ~ age+overall+potential+wage_eur+
+                    international_reputation+release_clause_eur+
+                    power_stamina+defending_sliding_tackle, data = train_data)
+summary(lm.fit.value)
+```
+
+```{r}
+# evaluate the model on test data -> the model results in a lower MSE for test data
+mean((test_data$value_eur - predict(lm.fit.value, test_data))^2)
+# use as baseline error
+```
+
+```{r}
+# plotting residuals vs. fittied values, residuals vs. leverage points
+par(mfrow=c(2,2))
+plot(lm.fit.value)
+```
+
+```{r}
+outliers <- boxplot(train_data$value_eur)$out
+outliers
+
+no_outliers_train_data <- train_data[-which(train_data$value_eur %in% outliers),]
+no_outliers_train_data
+```
+
+```{r}
+lm.fit.value = lm(value_eur ~ age+overall+potential+wage_eur+
+                    international_reputation+release_clause_eur+
+                    power_stamina+defending_sliding_tackle, data = no_outliers_train_data)
+summary(lm.fit.value)
+```
+
+```{r}
+plot(lm.fit.value)
+```
+
+```{r}
+mean((test_data$value_eur - predict(lm.fit.value, test_data))^2)
+```
+
+```{r}
+# Large value of leverage this statistic indicates an observation with high leverage
+plot(hatvalues(lm.fit.value))
+which.max(hatvalues(lm.fit.value))
+```
+
+```{r}
+library(gvlma)
+gvmodel <- gvlma(lm.fit.value)
+summary(gvmodel)
+```
+
+# Lambda grid for ridge and lasso
+
+```{r}
+# grid of possible lambda values
+grid = 10^seq(10, -2, length=100)
+```
+
+# Ridge Regression
+
+```{r}
+# matrix model for ridge regression
+x = model.matrix(value_eur ~ ., value_df)[,-1]
+y = value_df$value_eur
+```
+
+```{r}
+# get indexes for train/test split
+set.seed(1)
+train = sample(1:nrow(x), size = floor(.70*nrow(x)))
+test = (-train)
+y.test = y[test]
+```
+
+```{r}
+ridge.value = glmnet(x[train,], y[train], alpha = 0, lambda = grid, thresh=1e-12)
+```
+
+```{r}
+# Use cross-validation to select the optimal lambda value
+set.seed(1)
+cv.out = cv.glmnet(x[train,], y[train], alpha = 0)
+plot(cv.out)
+```
+
+```{r}
+bestlam = cv.out$lambda.min
+bestlam
+
+i <- which(cv.out$lambda == cv.out$lambda.min)
+mse.min <- cv.out$cvm[i]
+mse.min
+```
+
+```{r}
+# MSE obtained from Ridge regression is far greater than Forward Stepwise Selection
+ridge.value.pred = predict(ridge.value, s=bestlam, newx = x[test,])
+mean((ridge.value.pred-y.test)^2)
+```
+
+```{r}
+out=glmnet(x,y,alpha=0) 
+predict(out,type="coefficients",s=bestlam)[1:20,]
+```
+
+# Lasso
+
+```{r}
+lasso.value = glmnet(x[train,], y[train], alpha = 1, lambda = grid)
+plot(lasso.value)
+```
+
+```{r}
+# cross validation to select best lambda
+set.seed(1)
+cv.out = cv.glmnet(x[train,], y[train], alpha = 1)
+plot(cv.out)
+```
+
+```{r}
+# MSE for lasso on test set is far superior than ridge but still greater than baseline
+bestlam = cv.out$lambda.min
+
+i <- which(cv.out$lambda == cv.out$lambda.min)
+mse.min <- cv.out$cvm[i]
+mse.min
+
+lasso.value.pred = predict(lasso.value, s = bestlam, newx = x[test,])
+mean((lasso.value.pred - y.test)^2)
+```
+
+```{r}
+out = glmnet(x, y, alpha=1, lambda=grid) 
+lasso.coef = predict(out, type="coefficients", s=bestlam)[1:20,] 
+lasso.coef
+```
+
+```{r}
+lasso.coef[lasso.coef != 0]
+```
+
+# Tree-Based Methods: Random Forest
+
+```{r}
+set.seed(1)
+value.split = initial_split(value_df, prop = 0.7)
+value_train = training(value.split)
+value_test = testing(value.split)
+```
+
+```{r}
+rf.value = randomForest(value_eur ~ ., data = value_train)
+rf.value
+```
+
+```{r}
+plot(rf.value, log="y", main = "Number of Trees vs. Error")
+```
+
+
+```{r}
+# MSE is far superior than baseline linear regression model
+
+pred = predict(rf.value, value_test)
+mean((pred-value_test$value_eur)^2)
+```
+
+```{r}
+plot(pred, value_test$value_eur, 
+     xlab = "Predicted (value_eur)", 
+     ylab = "Actual (value_eur)",
+     main = "Random Forest: Preds vs. True")
+abline(0,1)
+```
+
+```{r}
+varImpPlot(rf.value, n.var = 10, main = "Random Forest: Feature Importance")
+```
+
+
+# Classification: Player Work Rate
+
+```{r}
+workR_df = value_df %>% separate(work_rate,
+                                 into=c("wR_attack", "wR_defense"),
+                                 sep = "/")
+
+workR_df = workR_df  %>% dplyr::select(-wR_defense)
+# filtering out players with Low work rate
+workR_df = workR_df %>% filter(wR_attack != "Low")
+workR_df %>% group_by(wR_attack) %>% summarise(count = n())
+workR_df
+```
+
+```{r}
+training.samples <- workR_df$wR_attack %>% createDataPartition(p = 0.7, list = FALSE)
+train.data <- workR_df[training.samples, ]
+train.data$wR_attack = ifelse(train.data$wR_attack == "High", 1, 0)
+test.data <- workR_df[-training.samples, ]
+test.data$wR_attack = ifelse(test.data$wR_attack == "High", 1, 0)
+dim(train.data)
+dim(test.data)
+```
+
+# Logistic regression
+
+```{r}
+model <- glm(wR_attack ~ ., train.data, family=binomial(link="logit"))
+link_scores <- predict(model, test.data %>% dplyr::select(-wR_attack), type="link")
+response_scores <- predict(model, 
+                           test.data %>% dplyr::select(-wR_attack), type="response")
+score_data <- data.frame(link=link_scores, 
+                         response=response_scores,
+                         wR_attack=test.data$wR_attack,
+                         stringsAsFactors=FALSE)
+
+score_data$wR_attack = ifelse(score_data$wR_attack == 1, "High", "Medium")
+
+score_data %>% 
+  ggplot(aes(x=link, y=response, col=wR_attack)) + 
+  scale_color_manual(values=c("black", "red")) + 
+  geom_point() + 
+  geom_rug() + 
+  ggtitle("Both link and response scores put cases in the same order")
+```
+
+```{r}
+simple_roc <- function(labels, scores){
+  labels <- labels[order(scores, decreasing=TRUE)]
+  data.frame(TPR=cumsum(labels)/sum(labels), FPR=cumsum(!labels)/sum(!labels), labels)
+}
+```
+
+```{r}
+library(pROC)
+
+plot(roc(test.data$wR_attack, response_scores, direction="<"),
+     col="yellow", lwd=1, main="The turtle finds its way", asp = NA)
+
+glm_simple_roc <- simple_roc(test.data$wR_attack == "Medium", link_scores)
+with(glm_simple_roc, points(1 - FPR, TPR, col=1 + labels))
+```
+
+```{r}
+library(InformationValue)
+optCutOff <- optimalCutoff(test.data$wR_attack, response_scores)[1] 
+optCutOff
+```
+
+```{r}
+misClassError(test.data$wR_attack, response_scores, threshold = optCutOff)
+#plotROC(test.data$wR_attack, response_scores)
+```
+
+```{r}
+sensitivity(test.data$wR_attack, response_scores, threshold = optCutOff)
+specificity(test.data$wR_attack, response_scores, threshold = optCutOff)
+confusionMatrix(test.data$wR_attack, response_scores, threshold = optCutOff)
+```
+
+
+# LDA Classification
+
+```{r}
+train.data$wR_attack = ifelse(train.data$wR_attack == 1, "High", "Medium")
+test.data$wR_attack = ifelse(test.data$wR_attack == 1, "High", "Medium")
+
+trCtrl <- trainControl(method = "cv", number = 10)
+
+fit_wRate <- train(wR_attack ~ ., 
+                   data = train.data, 
+                   method = "lda", 
+                   trControl = trCtrl, 
+                   metric = "Accuracy")
+
+preds <- predict(fit_wRate, test.data %>% dplyr::select(-wR_attack))
+
+comparison <- data.frame(original = test.data$wR_attack, pred = preds)
+
+#accuarcy of cross validated LDA model:
+mean(comparison$pred == test.data$wR_attack)
+
+#confusion matrix:
+confusionMatrix(as.factor(test.data$wR_attack), comparison$pred)
+```
+
+```{r}
+link_scores <- predict(model,  test.data %>% dplyr::select(-wR_attack), type="link")
+```
+# Decision tree classification:
+```{r}
+fit_wrate_dtree = train(wR_attack ~ ., 
+                  data = train.data, 
+                  method = "rpart", 
+                  trControl = trCtrl,
+                  metric = "Accuracy")
+
+pred_wrate_dtree <- predict(fit_wrate_dtree, test.data %>% dplyr::select(-wR_attack))
+comparison_dtree <- data.frame(original = test.data$wR_attack, pred_dtree = pred_wrate_dtree)
+
+# Accuarcy of cross validated Tree
+mean(comparison_dtree$pred_dtree == test.data$wR_attack)
+
+# Confusion matrix:
+confusionMatrix(as.factor(test.data$wR_attack), comparison_dtree$pred_dtree)
+```

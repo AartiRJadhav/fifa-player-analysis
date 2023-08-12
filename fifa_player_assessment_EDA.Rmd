@@ -1,0 +1,1413 @@
+---
+title: 'DS5220: FIFA Player Assessment Model and Analytics'
+author: "Akshit Jain, Naga Santhosh Kartheek Karnati, Praharsha Singaraju, Thomas Lindstrom-Vautrin"
+date: "3/25/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(cowplot)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(data.table)
+library(rio)
+library(modelr)
+library(purrr)
+library(tibble)
+library(corrplot)
+library(rquery)
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+```
+
+# Loading Data
+
+```{r}
+fifa16 <- fread("~/Desktop/Northeastern-University/SML/FIFA-Player-Assessment-Model-and-Analytics/Datasets/players_16.csv")
+fifa16 <- as_tibble(fifa16)
+
+fifa17 <- fread("~/Desktop/Northeastern-University/SML/FIFA-Player-Assessment-Model-and-Analytics/Datasets/players_17.csv")
+fifa1 <- as_tibble(fifa17)
+
+fifa18 <- fread("~/Desktop/Northeastern-University/SML/FIFA-Player-Assessment-Model-and-Analytics/Datasets/players_18.csv")
+fifa18 <- as_tibble(fifa18)
+
+fifa19 <- fread("~/Desktop/Northeastern-University/SML/FIFA-Player-Assessment-Model-and-Analytics/Datasets/players_19.csv")
+fifa19 <- as_tibble(fifa19)
+
+fifa20 <- fread("~/Desktop/Northeastern-University/SML/FIFA-Player-Assessment-Model-and-Analytics/Datasets/players_20.csv")
+fifa20 <- as_tibble(fifa20)
+
+fifa_datasets_list = list(fifa16, fifa17, fifa18, fifa19, fifa20)
+years = list("2016", "2017", "2018", "2019", "2020")
+```
+
+# Exploratory Data Analysis
+
+# Abstract Hypothesis EDA 
+
+# 1. There exists a positive correlation between player rating and value
+```{r}
+# Correlation between player overall and value in euros
+for (i in seq_along(fifa_datasets_list)) {
+  ovr_val_wag <- fifa_datasets_list[[i]] %>% select(overall, value_eur, wage_eur)
+  cor_ovr_val_wag <- cor(ovr_val_wag)
+  print(paste("Year", years[[i]], ":"))
+  print(round(cor_ovr_val_wag, 2))
+}
+fifa20 %>% ggplot(aes(x=overall,y=value_eur)) + geom_point() + geom_jitter() +
+  labs(x = "player rating", y = "player value (euro)", 
+       title = "Plot of player rating vs player value")
+```
+
+# 2. Player wage and age are positively correlated upto the age of 31 
+# and negatively correlated after that
+```{r}
+# WAGE AND AGE CORRELATION: scatter plot of wage and age
+for (i in seq_along(fifa_datasets_list)) {
+  wage_age_plt <- fifa_datasets_list[[i]] %>% ggplot(aes(age, wage_eur)) + 
+    geom_point() + geom_jitter() + 
+    labs(x="player age", y="player wage (euros)", 
+         title=paste("Year", years[[i]], ":", "Wage vs Age Scatter Plot"))
+  print(wage_age_plt)
+}
+
+for (i in seq_along(fifa_datasets_list)) {
+  
+  players31_andless <- fifa_datasets_list[[i]] %>% 
+    filter(age <= 31)%>% select(age, wage_eur, value_eur)
+  players_over31 <- fifa_datasets_list[[i]] %>% 
+    filter(age > 31)%>% select(age, wage_eur, value_eur)
+  
+  cor_31andless_cor <- cor(players31_andless)
+  print(paste("Year", years[[i]], ":", "Players <= 31"))
+  print(round(cor_31andless_cor, 2))
+  #age and wage are +vely correlated but the correlation is not very high.
+
+  players_over31_cor <- cor(players_over31)
+  print(paste("Year", years[[i]], ":", "Players > 31"))
+  print(round(players_over31_cor, 2))
+  #age and wage are -vely correlated but the correlation is not very high.
+}
+```
+
+# 3. Left footed players have a higher overall rating compared to right footed players
+```{r}
+# Left footed players have a higher overall rating compared to right footed players
+for (i in seq_along(fifa_datasets_list)) {
+  left_foot <- fifa_datasets_list[[i]] %>% filter(preferred_foot=="Left") %>%
+    summarise(avg_player_overall_left = mean(overall)) %>% mutate(year = years[[i]])
+  
+  
+  right_foot <- fifa_datasets_list[[i]] %>% filter(preferred_foot=="Right")%>%
+    summarise(avg_player_overall_right = mean(overall)) %>% mutate(year = years[[i]])
+  
+  foot_rating_year <- left_foot %>% left_join(right_foot)
+  print(foot_rating_year)
+}
+```
+
+# 4. Tall, short and strong players are statistically good at 
+# heading, dribbling and tackling respectively
+```{r}
+# Tall players and heading: scatter plot of height vs heading
+fifa20 %>% ggplot(aes(height_cm, attacking_heading_accuracy)) + 
+  geom_point() + geom_jitter() + 
+  labs(x="player height in cm", y="heading score out of 100",
+       title = "Plot of height vs heading score")
+
+no_sub_res = fifa20 %>% filter(team_position != "SUB" & team_position != "RES" & team_position != "GK" )
+fit_av <- lm(height_cm ~ attacking_heading_accuracy, data = no_sub_res)
+summary(fit_av)
+
+no_sub_res %>% ggplot(aes(x=height_cm,y=attacking_heading_accuracy)) +
+  geom_point() + geom_smooth(method='lm', formula= y~x) + 
+  labs(x="player height in cm", y="heading score out of 100",
+       title = "Plot of height vs heading score")
+
+# THIS IS A VERY INTERESTING FIND. WHY?
+cor(fifa20$height_cm, fifa20$attacking_heading_accuracy,  
+    method = "spearman", use = "complete.obs")
+# There exists a weak positive correlation between height and heading.
+
+# Short players and dribbling: scatter plot of height vs dribbling
+fifa20 %>% ggplot(aes(height_cm, dribbling))+geom_point()+
+  geom_jitter()+labs(x="player height in cm", y="dribbling score out of 100",
+                     title = "Plot of height vs dribbling score")
+cor(fifa20$height_cm, fifa20$dribbling,  
+    method = "spearman", use = "complete.obs")
+# There is a weak negative correlation b/w height and dribbling ie short players are good at dribbling.
+
+#Dribbling and movement attributes:
+cor(fifa20$dribbling, fifa20$movement_agility,
+    method = "pearson", use = "complete.obs")
+#Dribbling and movement_agility are highly +vely correlated
+
+cor(fifa20$dribbling, fifa20$movement_balance,
+    method = "pearson", use = "complete.obs")
+#Dribbling and movement_balance are moderately +vely correlated
+
+# Correlation matrix for dribbling and movement attributes:
+drib_move <- fifa20 %>% select(dribbling,movement_acceleration,
+                            movement_sprint_speed, movement_agility,
+                            movement_reactions, movement_balance)
+source("http://www.sthda.com/upload/rquery_cormat.r")
+require("corrplot")
+rquery.cormat(drib_move)
+# We can see from the corrplot that dribbling is highly
+# +vely correlated with the movement attributes.
+
+# Strong players and tackling(both standing and sliding) 
+# scatter plot of physique vs standing tackling
+
+fifa20 %>% filter(team_position != "GK" | team_position != "SUB", team_position != "RES") %>%
+  ggplot(aes(physic, defending_standing_tackle))+geom_point()+
+  geom_jitter()+labs(x="physique of players", y="standing tackling",
+                     title = "physique vs standing tackling")
+cor(fifa20$physic, fifa20$defending_standing_tackle,
+    method = "pearson", use = "complete.obs")
+# Moderate +ve correlation
+
+# Scatter plot of physique vs sliding tackling
+
+fifa20 %>% filter(team_position != "GK" | team_position != "SUB", team_position != "RES") %>%
+  ggplot(aes(physic, defending_sliding_tackle))+geom_point()+
+  geom_jitter()+labs(x="physique of players", y="sliding tackling",
+                     title = "physique vs sliding tackling")
+cor(fifa20$physic, fifa20$defending_sliding_tackle,
+    method = "pearson", use = "complete.obs")
+```
+
+```{r}
+team_of_the_year <- function(year_data) {
+  
+  team_11 <- vector(mode = "list", length = 11)
+  
+  # STRIKER - positions to be considered: ST, CF, LS, RS, LF, RF
+  striker <- year_data %>% filter(team_position %in% c("ST","CF","LS","RS","LF","RF")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[1]] = data.frame(striker)
+  
+  # Wingers: 2 wingers to be picked, one on the left and one on the right.
+  # positions to be considered: RW, LW
+  lw <- year_data %>% filter(team_position %in% c("LW")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[2]] = data.frame(lw)
+  
+  rw <- year_data %>% filter(team_position %in% c("RW")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[3]] = data.frame(rw)
+  
+  # 1 AM, positions: CAM, LAM, RAM
+  am <- year_data %>% filter(team_position %in% c("CAM","LAM","RAM")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[4]] = data.frame(am)
+  
+  # 2 midfielders, one on the right and one on the left:
+  # right midfielder: RCM, CDM, RDM, CM
+  rm <- year_data %>% filter(team_position %in% c("RCM","CDM","RDM","CM")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[5]] = data.frame(rm)
+  
+  # left midfielder: LCM, CDM, LDM, CM
+  lm <- year_data %>% filter(team_position %in% c("LCM","CDM","LDM","CM")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[6]] = data.frame(lm)
+  
+  # 2 wing backs, one on the right and one on the left:
+  # left back, positions to be considered: LB, LWB
+  lb <- year_data %>% filter(team_position %in% c("LWB","LB")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[7]] = data.frame(lb)
+ 
+  # right back, positions to be considered: RB, RWB
+  rb <- year_data %>% filter(team_position %in% c("RWB","RB")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[8]] = data.frame(rb)
+  
+  # 2 centre backs:
+  # positions to be considered: LCB, RCB
+  lcb <- year_data %>% filter(team_position %in% c("LCB")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[9]] = data.frame(lcb)
+  
+  rcb <- year_data %>% filter(team_position %in% c("RCB")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[10]] = data.frame(rcb)
+  
+  gk <- year_data %>% filter(team_position %in% c("GK")) %>%
+    arrange(desc(overall)) %>% select(short_name, team_position, overall) %>% top_n(1)
+  team_11[[11]] = data.frame(gk)
+
+  best11 <- do.call("rbind", team_11)
+  print(best11)
+}
+```
+
+# 5. The starting eleven with the highest overall rating 
+# for a given year wins the champions league that year
+```{r}
+# FIFA World 11 
+
+unique(fifa20$team_position)
+# Assuming a 4231 formation, we come up with the best team for each year.
+
+for (i in seq_along(fifa_datasets_list)) {
+  print(paste("Year", years[[i]], ":"))
+  team_of_the_year(fifa_datasets_list[[i]])
+}
+```
+
+
+# Other Supplementary EDA
+
+```{r}
+# Histogram of player age by year
+for (i in seq_along(fifa_datasets_list)) {
+  player_age_by_year <- fifa_datasets_list[[i]] %>% ggplot(aes(age)) + 
+    geom_bar() + 
+    labs(x="player age", y="number of players",
+         title=paste("Year", years[[i]], ":", "Number of players by age"))
+  print(player_age_by_year)
+}
+```
+
+```{r}
+# Histogram of player rating by year
+for (i in seq_along(fifa_datasets_list)) {
+  player_rating_by_year <- fifa_datasets_list[[i]] %>% ggplot(aes(overall)) + 
+    geom_bar() + 
+    labs(x="player rating", y="number of players",
+         title=paste("Year", years[[i]], ":", "Number of players by rating"))
+  print(player_rating_by_year)
+}
+```
+
+```{r}
+# Which country has the most players by year
+for (i in seq_along(fifa_datasets_list)) {
+  country_by_players_count <- fifa_datasets_list[[i]] %>% group_by(nationality) %>%
+    summarise(count=n()) %>% arrange(desc(count)) %>% top_n(10) %>%
+    ggplot(aes(x=nationality,y=count)) + geom_bar(stat = "identity") + 
+    labs(x="player count", y="nationality",
+         title=paste("Year", years[[i]], ":", "Which Country has the most Players?"))
+  print(country_by_players_count)
+}
+```
+
+```{r}
+# Histogram of weight in kgs by year
+for (i in seq_along(fifa_datasets_list)) {
+  player_weight_by_year <- fifa_datasets_list[[i]] %>%
+    ggplot(aes(weight_kg)) + 
+    geom_bar() + 
+    labs(x="player weight", y="number of players",
+         title=paste("Year", years[[i]], ":", "Number of players by weight in kgs" ))
+  print(player_weight_by_year)
+}
+```
+
+```{r}
+# Histogram of height in cms by year
+for (i in seq_along(fifa_datasets_list)) {
+  player_height_by_year <- fifa_datasets_list[[i]] %>%
+    ggplot(aes(height_cm)) + 
+    geom_bar() + 
+    labs(x="player height", y="number of players",
+         title=paste("Year", years[[i]], ":", "Number of players by height in cms" ))
+  print(player_height_by_year)
+}
+```
+
+```{r}
+# Top 10 players with highest value in euros
+for (i in seq_along(fifa_datasets_list)) {
+  top10_value_players <- fifa_datasets_list[[i]] %>% arrange(desc(value_eur)) %>% 
+    select(short_name, club, nationality, overall, value_eur) %>% top_n(10) %>%
+    ggplot(aes(x=short_name, y=value_eur)) + geom_bar(stat = "identity") +
+    labs(x="player name", y="player value (euro)",
+         title=paste("Year", years[[i]], ":", "Top 10 players highest value in euros" )) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(top10_value_players)
+}
+```
+
+```{r}
+# Top 10 players with highest weekly wage in euros
+for (i in seq_along(fifa_datasets_list)) {
+  top10_weekly_wage_players <- fifa_datasets_list[[i]] %>% arrange(desc(wage_eur)) %>% 
+    select(short_name, club, nationality, overall, wage_eur) %>% top_n(10) %>%
+    ggplot(aes(x=short_name, y=wage_eur)) + geom_bar(stat = "identity") +
+    labs(x="player name", y="weekly wage (euro)",
+         title=paste("Year", years[[i]], ":", "Top 10 players weekly wage in euros" )) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(top10_weekly_wage_players)
+}
+```
+
+```{r}
+# TTop 10 players with best rating
+for (i in seq_along(fifa_datasets_list)) {
+  top10_players <- fifa_datasets_list[[i]] %>% arrange(desc(overall)) %>% 
+    select(short_name, club, nationality, overall, overall) %>% top_n(10) %>%
+    ggplot(aes(x=short_name, y=overall)) + geom_bar(stat = "identity") +
+    labs(x="player name", y="overall rating",
+         title=paste("Year", years[[i]], ":", "Top 10 Players with highest rating" )) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(top10_players)
+}
+```
+
+```{r}
+# Top 10 players with the best potential overall
+for (i in seq_along(fifa_datasets_list)) {
+  top10_best_potential <- fifa_datasets_list[[i]] %>% arrange(desc(potential))  %>% 
+    select(short_name, club, nationality, overall, potential) %>% top_n(10)
+  print(top10_best_potential)
+}
+```
+
+```{r}
+# Players aged 25 or less with best potential:
+for (i in seq_along(fifa_datasets_list)) {
+  top_potential_below_25 <- fifa_datasets_list[[i]] %>% filter(age <= 25) %>%
+    arrange(desc(potential)) %>% top_n(50) %>%
+    select(short_name, club, nationality, overall, potential)
+  print(top_potential_below_25)
+}
+```
+
+```{r}
+# Players aged 21 or less with best potential:
+for (i in seq_along(fifa_datasets_list)) {
+  top_potential_below_21 <- fifa_datasets_list[[i]] %>% filter(age <= 21) %>%
+    arrange(desc(potential)) %>% top_n(50) %>%
+    select(short_name, club, nationality, overall, potential)
+  print(top_potential_below_21)
+}
+```
+
+```{r}
+#Player with highest scope for increase in overall
+for (i in seq_along(fifa_datasets_list)) {
+  pot_inc <- fifa_datasets_list[[i]] %>%
+    mutate(pot_increase = potential-overall) %>%
+    arrange(desc(pot_increase)) %>%
+    select(short_name, club, nationality, age, overall, potential, pot_increase)
+  
+  #we see that young players have scope for highest increase in rating.
+  #so are pot_increase and age positively correlated?
+  
+  pot_inc_age_pot_inc <- pot_inc %>% select(age, pot_increase)
+  cor_pot_inc_age_pot_inc <- cor(pot_inc_age_pot_inc)
+  print(paste("Year", years[[i]], ":"))
+  print(round(cor_pot_inc_age_pot_inc, 2))
+}
+```
+
+```{r}
+# 6 PHYSICAL ATTRIBUTES: pace, shooting, passing, dribbling, defending and physique
+
+pace_dfs <- vector(mode = "list", length = 5)
+shooting_dfs <- vector(mode = "list", length = 5)
+passing_dfs <- vector(mode = "list", length = 5)
+dribble_dfs <- vector(mode = "list", length = 5)
+defend_dfs <- vector(mode = "list", length = 5)
+physic_dfs <- vector(mode = "list", length = 5)
+
+for (i in seq_along(fifa_datasets_list)) {
+  
+  # pace
+  pace_ <- fifa_datasets_list[[i]] %>% arrange(desc(pace)) %>% 
+    select(short_name, club, nationality, overall, team_position, pace) %>% top_n(1)
+  pace_ <- add_column(pace_, years[[i]], .before = "short_name")
+  pace_dfs[[i]] <- data.frame(pace_)
+  
+  # shooting
+  shooting_ <- fifa_datasets_list[[i]] %>% arrange(desc(shooting)) %>% 
+    select(short_name, club, nationality, overall, team_position, shooting) %>% top_n(1)
+  shooting_ <- add_column(shooting_, years[[i]], .before = "short_name")
+  shooting_dfs[[i]] <- data.frame(shooting_)
+  
+  # passing
+  passing_ <- fifa_datasets_list[[i]] %>% arrange(desc(passing)) %>% 
+    select(short_name, club, nationality, overall, team_position, passing) %>% top_n(1)
+  passing_ <- add_column(passing_, years[[i]], .before = "short_name")
+  passing_dfs[[i]] <- data.frame(passing_)
+  
+  # dribble
+  dribble_ <- fifa_datasets_list[[i]] %>% arrange(desc(dribbling)) %>% 
+    select(short_name, club, nationality, overall, team_position, dribbling) %>% top_n(1)
+  dribble_ <- add_column(dribble_, years[[i]], .before = "short_name")
+  dribble_dfs[[i]] <- data.frame(dribble_)
+  
+  # defending
+  defend_ <- fifa_datasets_list[[i]] %>% arrange(desc(defending)) %>% 
+    select(short_name, club, nationality, overall, team_position, defending) %>% top_n(1)
+  defend_ <- add_column(defend_, years[[i]], .before = "short_name")
+  defend_dfs[[i]] <- data.frame(defend_)
+  
+  # physic
+  physic_ <- fifa_datasets_list[[i]] %>% arrange(desc(physic)) %>% 
+    select(short_name, club, nationality, overall, team_position, physic) %>% top_n(1)
+  physic_ <- add_column(physic_, years[[i]], .before = "short_name")
+  physic_dfs[[i]] <- data.frame(physic_)
+}
+
+pace_df <- do.call("rbind", pace_dfs)
+shooting_df <- do.call("rbind", shooting_dfs)
+passing_df <- do.call("rbind", passing_dfs)
+dribble_df <- do.call("rbind", dribble_dfs)
+defend_df <- do.call("rbind", defend_dfs)
+physic_df <- do.call("rbind", physic_dfs)
+
+print(pace_df)
+print(shooting_df)
+print(passing_df)
+print(dribble_df)
+print(defend_df)
+print(physic_df)
+```
+
+```{r}
+# Goalkeeping stats
+top_gks_dfs <- vector(mode = "list", length = 5)
+gk_diving_dfs <- vector(mode = "list", length = 5)
+gk_handling_dfs <- vector(mode = "list", length = 5)
+gk_kicking_dfs <- vector(mode = "list", length = 5)
+gk_reflex_dfs <- vector(mode = "list", length = 5)
+gk_speed_dfs <- vector(mode = "list", length = 5)
+gk_position_dfs <- vector(mode = "list", length = 5)
+
+for (i in seq_along(fifa_datasets_list)) {
+  
+  # Top 5 best goalkeepers by year
+  top_5_gk <- fifa_datasets_list[[i]] %>% filter(team_position=="GK") %>% arrange(desc(overall)) %>%
+    select(short_name, club, nationality, overall) %>% top_n(5)
+  top_5_gk <- add_column(top_5_gk, years[[i]], .before = "short_name")
+  top_gks_dfs[[i]] <- data.frame(top_5_gk)
+  
+  # Top 5 best divers by year
+  top_5_divers <- fifa_datasets_list[[i]] %>% filter(team_position=="GK") %>% arrange(desc(gk_diving)) %>%
+    select(short_name, club, nationality, gk_diving) %>% top_n(5)
+  top_5_divers <- add_column(top_5_divers, years[[i]], .before = "short_name")
+  gk_diving_dfs[[i]] <- data.frame(top_5_divers)
+  
+  # Top 5 best handlers by year
+  top_5_handlers <- fifa_datasets_list[[i]] %>% filter(team_position=="GK") %>% 
+    arrange(desc(gk_handling)) %>% select(short_name, club, nationality, gk_handling) %>% top_n(5)
+  top_5_handlers <- add_column(top_5_handlers, years[[i]], .before = "short_name")
+  gk_handling_dfs[[i]] <- data.frame(top_5_handlers)
+  
+  # Top 5 best kickers by year
+  top_5_kickers <- fifa_datasets_list[[i]] %>% filter(team_position=="GK") %>% 
+    arrange(desc(gk_kicking)) %>% select(short_name, club, nationality, gk_kicking) %>% top_n(5)
+  top_5_kickers <- add_column(top_5_kickers, years[[i]], .before = "short_name")
+  gk_kicking_dfs[[i]] <- data.frame(top_5_kickers)
+  
+  # Top 5 best reflexes by year
+  top_5_reflex <- fifa_datasets_list[[i]] %>% filter(team_position=="GK") %>% 
+    arrange(desc(gk_reflexes)) %>% select(short_name, club, nationality, gk_reflexes) %>% top_n(5)
+  top_5_reflex <- add_column(top_5_reflex, years[[i]], .before = "short_name")
+  gk_reflex_dfs[[i]] <- data.frame(top_5_reflex)
+  
+  # Top 5 best speed by year
+  top_5_speed <- fifa_datasets_list[[i]] %>% filter(team_position=="GK") %>% 
+    arrange(desc(gk_speed)) %>% select(short_name, club, nationality, gk_speed) %>% top_n(5)
+  top_5_speed <- add_column(top_5_speed, years[[i]], .before = "short_name")
+  gk_speed_dfs[[i]] <- data.frame(top_5_speed)
+  
+  # Top 5 best position by year
+  top_5_position <- fifa_datasets_list[[i]] %>% filter(team_position=="GK") %>% 
+    arrange(desc(gk_positioning)) %>% select(short_name, club, nationality, gk_positioning) %>% top_n(5)
+  top_5_position <- add_column(top_5_position, years[[i]], .before = "short_name")
+  gk_position_dfs[[i]] <- data.frame(top_5_position)
+}
+
+top_5_gks_yearly_df <- do.call("rbind", top_gks_dfs)
+gk_diving_yearly_df <- do.call("rbind", gk_diving_dfs)
+gk_handling_yearly_df <- do.call("rbind", gk_handling_dfs)
+gk_kicking_yearly_df <- do.call("rbind", gk_kicking_dfs)
+gk_reflexes_yearly_df <- do.call("rbind", gk_reflex_dfs)
+gk_speed_yearly_df <- do.call("rbind", gk_speed_dfs)
+gk_position_yearly_df <- do.call("rbind", gk_position_dfs)
+
+print(top_5_gks_yearly_df )
+print(gk_diving_yearly_df)
+print(gk_handling_yearly_df)
+print(gk_kicking_yearly_df)
+print(gk_reflexes_yearly_df)
+print(gk_speed_yearly_df)
+print(gk_position_yearly_df)
+```
+
+```{r}
+# Attacking Stats: attacking_crossing, attacking_finishing and attacking_heading_accuracy
+attack_crossing_dfs <- vector(mode = "list", length = 5)
+attack_finish_dfs <- vector(mode = "list", length = 5)
+attack_head_acc_dfs <- vector(mode = "list", length = 5)
+
+for (i in seq_along(fifa_datasets_list)) {
+  
+  # Top 5 best crossers by year
+  top_attack_crossing <- fifa_datasets_list[[i]] %>% arrange(desc(attacking_crossing)) %>%
+    select(short_name, club, nationality, overall, attacking_crossing) %>% top_n(5)
+  top_attack_crossing <- add_column(top_attack_crossing, years[[i]], .before = "short_name")
+  attack_crossing_dfs[[i]] <- data.frame(top_attack_crossing)
+
+  # Top 5 best finishers by year
+  top_attack_finish <- fifa_datasets_list[[i]] %>% arrange(desc(attacking_finishing)) %>%
+    select(short_name, club, nationality, overall, attacking_finishing) %>% top_n(5)
+  top_attack_finish <- add_column(top_attack_finish, years[[i]], .before = "short_name")
+  attack_finish_dfs[[i]] <- data.frame(top_attack_finish)
+  # ARE FINISHING AND SHOOTING CORRELATED?
+  
+  # Top 5 players most likely to score a goal via a header each year
+  top_head_acc <- fifa_datasets_list[[i]] %>% arrange(desc(attacking_heading_accuracy)) %>%
+    select(short_name, club, nationality, overall, attacking_heading_accuracy) %>% top_n(5)
+  top_head_acc <- add_column(top_head_acc, years[[i]], .before = "short_name")
+  attack_head_acc_dfs[[i]] <- data.frame(top_head_acc)
+}
+
+print(do.call("rbind", attack_crossing_dfs))
+print(do.call("rbind", attack_finish_dfs))
+print(do.call("rbind", attack_head_acc_dfs))
+```
+
+```{r}
+# Movement Stats: movement_acceleration and movement_balance
+mov_acc_dfs <- vector(mode = "list", length = 5)
+mov_bal_dfs <- vector(mode = "list", length = 5)
+
+for (i in seq_along(fifa_datasets_list)) {
+  
+  # Top 5 players with best acceleration
+  top_acc <- fifa_datasets_list[[i]] %>% arrange(desc(movement_acceleration)) %>%
+    select(short_name, club, nationality, overall, movement_acceleration) %>% top_n(5)
+  top_acc <- add_column(top_acc, years[[i]], .before = "short_name")
+  mov_acc_dfs[[i]] <- data.frame(top_acc)
+
+  # Top 5 players with best balance
+  top_bal <- fifa_datasets_list[[i]] %>% arrange(desc(movement_balance)) %>%
+    select(short_name, club, nationality, overall, movement_balance) %>% top_n(5)
+  top_bal <- add_column(top_bal, years[[i]], .before = "short_name")
+  mov_bal_dfs[[i]] <- data.frame(top_bal)
+  # ARE BALANCE AND DRIBBLING CORRELATED?
+}
+
+print(do.call("rbind", mov_acc_dfs))
+print(do.call("rbind", mov_bal_dfs))
+```
+
+```{r}
+# Power Stats:  power_shot_power, power_jumping, power_strength
+shot_dfs <- vector(mode = "list", length = 5)
+jump_dfs <- vector(mode = "list", length = 5)
+strength_dfs <- vector(mode = "list", length = 5)
+
+for (i in seq_along(fifa_datasets_list)) {
+  
+  # Top 5 players with best shot power by year
+  top_shot <- fifa_datasets_list[[i]] %>% arrange(desc(power_shot_power)) %>%
+    select(short_name, club, nationality, overall, power_shot_power) %>% top_n(5)
+  top_shot <- add_column(top_shot, years[[i]], .before = "short_name")
+  shot_dfs[[i]] <- data.frame(top_shot)
+  # ARE SHOOTING AND SHOT POWER CORRELATED?
+
+  # Top 5 players with best power jump by year
+  top_jump <- fifa_datasets_list[[i]] %>% arrange(desc(power_jumping)) %>%
+    select(short_name, club, nationality, overall, power_jumping) %>% top_n(5)
+  top_jump <- add_column(top_jump, years[[i]], .before = "short_name")
+  jump_dfs[[i]] <- data.frame(top_jump)
+  # ARE JUMPING AND ATTACKING_HEADING_ACCURACY CORRELATED?
+  
+  # Top 5 players with most power strength by year
+  top_strength <- fifa_datasets_list[[i]] %>% arrange(desc(power_strength)) %>%
+    select(short_name, club, nationality, overall, power_strength) %>% top_n(5)
+  top_strength <- add_column(top_strength, years[[i]], .before = "short_name")
+  strength_dfs[[i]] <- data.frame(top_strength)
+  
+}
+print(do.call("rbind", shot_dfs))
+print(do.call("rbind", jump_dfs))
+print(do.call("rbind", strength_dfs))
+```
+
+```{r}
+# Mentality Stats:  mentality_positioning, mentality_penalties and mentality_vision
+position_dfs <- vector(mode = "list", length = 5)
+penalty_dfs <- vector(mode = "list", length = 5)
+vision_dfs <- vector(mode = "list", length = 5)
+
+for (i in seq_along(fifa_datasets_list)) {
+  
+  # Top 5 players with best position sense by year
+  top_posit <- fifa_datasets_list[[i]] %>% arrange(desc(mentality_positioning)) %>%
+    select(short_name, club, nationality, overall, team_position, mentality_positioning) %>% top_n(5)
+  top_posit <- add_column(top_posit, years[[i]], .before = "short_name")
+  position_dfs[[i]] <- data.frame(top_posit)
+
+  # Top 5 best penalty takers by year
+  top_penalty <- fifa_datasets_list[[i]] %>% arrange(desc(mentality_penalties)) %>%
+    select(short_name, club, nationality, overall, mentality_penalties) %>% top_n(5)
+  top_penalty <- add_column(top_penalty, years[[i]], .before = "short_name")
+  penalty_dfs[[i]] <- data.frame(top_penalty)
+  # ARE ATTACKING FINISHING AND PENALTIES CORRELATED?
+  
+  # Top 5 players with best vision by year
+  top_vision <- fifa_datasets_list[[i]] %>% arrange(desc(mentality_vision)) %>%
+    select(short_name, club, nationality, overall, mentality_vision) %>% top_n(5)
+  top_vision <- add_column(top_vision, years[[i]], .before = "short_name")
+  vision_dfs[[i]] <- data.frame(top_vision)
+  # ARE VISION AND PASSING CORRELATED?
+  
+}
+print(do.call("rbind", position_dfs))
+print(do.call("rbind", penalty_dfs))
+print(do.call("rbind", vision_dfs))
+```
+
+```{r}
+# Defending Stats:  defending_marking, defending_standing_tackle, defending_sliding_tackle
+marking_dfs <- vector(mode = "list", length = 5)
+stand_tackle_dfs <- vector(mode = "list", length = 5)
+slide_tackle_dfs <- vector(mode = "list", length = 5)
+
+for (i in seq_along(fifa_datasets_list)) {
+  
+  # Top 5 players best markers by year
+  top_mark <- fifa_datasets_list[[i]] %>% arrange(desc(defending_marking)) %>%
+    select(short_name, club, nationality, overall, defending_marking) %>% top_n(5)
+  top_mark <- add_column(top_mark, years[[i]], .before = "short_name")
+  marking_dfs[[i]] <- data.frame(top_mark)
+
+  # Top 5 best players at standing tackle by year
+  top_stand_t <- fifa_datasets_list[[i]] %>% arrange(desc(defending_standing_tackle)) %>%
+    select(short_name, club, nationality, overall, defending_standing_tackle) %>% top_n(5)
+  top_stand_t <- add_column(top_stand_t, years[[i]], .before = "short_name")
+  stand_tackle_dfs[[i]] <- data.frame(top_stand_t)
+  
+  # Top 5 best players at sliding tackle by year
+  top_slide_t <- fifa_datasets_list[[i]] %>% arrange(desc(defending_sliding_tackle)) %>%
+    select(short_name, club, nationality, overall, defending_sliding_tackle) %>% top_n(5)
+  top_slide_t <- add_column(top_slide_t, years[[i]], .before = "short_name")
+  slide_tackle_dfs[[i]] <- data.frame(top_slide_t)
+  
+}
+print(do.call("rbind", marking_dfs))
+print(do.call("rbind", stand_tackle_dfs))
+print(do.call("rbind", slide_tackle_dfs))
+```
+
+```{r}
+# Team Stats
+
+for (i in seq_along(fifa_datasets_list)) {
+  
+  # Top 10 teams with highest average player overall
+  top_10_teams <- fifa_datasets_list[[i]] %>% 
+    filter(!club %in% c("Uruguay","Colombia","Mexico","Netherlands")) %>%
+    group_by(club) %>% summarise(avg_player_ovr = mean(overall)) %>% 
+    arrange(desc(avg_player_ovr)) %>% top_n(10)
+  print(paste("Year", years[[i]], ":"))
+  print(top_10_teams)
+  
+  # Top 10 teams with highest average player overall in 
+  # the starting 11 excluding subs and reserves
+  top_10_special <- fifa_datasets_list[[i]] %>% 
+    filter(!club %in% c("Uruguay","Colombia","Mexico","Netherlands")) %>%
+    filter(!team_position %in% c("SUB","RES")) %>% 
+    group_by(club) %>% summarise(avg_player_ovr = mean(overall)) %>% 
+    arrange(desc(avg_player_ovr)) %>% top_n(10)
+  print(paste("Year", years[[i]], ":", "excluding reserves ans substitute players"))
+  print(top_10_special)
+  
+  # Worst 10 teams:
+  worst_teams <- fifa_datasets_list[[i]] %>% 
+    filter(!club %in% c("Uruguay","Colombia","Mexico","Netherlands","India"))%>%
+    filter(!team_position %in% c("SUB","RES")) %>%
+    group_by(club) %>%
+    summarise(avg_player_ovr = mean(overall)) %>%
+    arrange(avg_player_ovr) %>% top_n(10)
+  print(paste("Year", years[[i]], ":", "worst 10 teams"))
+  print(worst_teams)
+  
+  # Top 10 most valuable squads:
+  most_val_team <- fifa_datasets_list[[i]] %>% group_by(club)%>%
+    summarise(squad_value_eur = sum(value_eur)) %>% arrange(desc(squad_value_eur)) %>% top_n(10)
+  print(paste("Year", years[[i]], ":", "most valuable squads"))
+  print(most_val_team)
+  
+  # Top 10 high weekly wage teams:
+  most_wage_team <- fifa_datasets_list[[i]] %>% group_by(club)%>%
+    summarise(wage_value_eur = sum(wage_eur)) %>% arrange(desc(wage_value_eur)) %>% top_n(10)
+  print(paste("Year", years[[i]], ":", "high weekly wage"))
+  print(most_wage_team)
+}
+```
+
+```{r}
+# FIFA World 11 - AGED 23 OR LESS
+
+unique(fifa20$team_position)
+# Assuming a 4231 formation, we come up with the best team for each year.
+
+for (i in seq_along(fifa_datasets_list)) {
+  print(paste("Year", years[[i]], ":"))
+  fifa_team_leq_23 <- fifa_datasets_list[[i]] %>% filter(age <= 23)
+  team_of_the_year(fifa_team_leq_23)
+}
+```
+
+# ONLY for Year 2020
+```{r}
+# HIGHEST RATED PLAYERS FOR FAMOUS JERSEY NUMBERS: 1,2,3,4,5,6,7,8,9,10,11
+
+fifa20 %>% filter(team_jersey_number==1) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Ter Stegen
+
+fifa20 %>% filter(team_jersey_number==2) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Godin
+
+fifa20 %>% filter(team_jersey_number==3) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Chiellini
+
+fifa20 %>% filter(team_jersey_number==4) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Van Dijk
+
+fifa20 %>% filter(team_jersey_number==5) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Busquets
+
+fifa20 %>% filter(team_jersey_number==6) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Pogba
+
+fifa20 %>% filter(team_jersey_number==7) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Ronaldo
+
+fifa20 %>% filter(team_jersey_number==8) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Toni Kroos
+
+fifa20 %>% filter(team_jersey_number==9) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Lewandowski
+
+fifa20 %>% filter(team_jersey_number==10) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Messi
+
+fifa20 %>% filter(team_jersey_number==11) %>%
+  arrange(desc(overall))%>%
+  select(short_name, team_jersey_number, overall) %>% top_n(1)
+#Salah
+```
+
+```{r}
+# PLAYERS WITH THE BEST SKILL MOVES WITH OVERALL >=85
+fifa20 %>% filter(overall>=85,skill_moves==5)%>%arrange(desc(skill_moves)) %>%
+  select(short_name, club, nationality, team_position,overall,skill_moves) %>%
+  group_by(skill_moves) %>% top_n(1) %>% ungroup()
+
+# PLAYERS WITH BEST WEAK FOOT WITH OVERALL >=85
+fifa20 %>% filter(overall>=85,weak_foot==5)%>%arrange(desc(weak_foot)) %>%
+  select(short_name, club, nationality, team_position,overall,weak_foot) %>%
+  group_by(weak_foot) %>% top_n(1) %>% ungroup()
+```
+
+```{r}
+# Are skill_moves and dribbling correlated?
+# Boxplot of skill_moves vs dribbling
+fifa20 %>% ggplot(aes(as.factor(skill_moves),dribbling))+geom_boxplot()+
+  labs(x="skill_moves out of 5",y="dribbling score out of 100",
+       title = "Boxplot of skill_moves vs dribbling")
+#They are positively correlated
+#Strength of correlation:
+cor(fifa20$skill_moves, fifa20$dribbling, method = "spearman",
+               use = "complete.obs")
+# High positive correlation.
+
+# Are players with a strong weak foot good at shooting?
+# Boxplot of weak foot vs shooting
+fifa20 %>% ggplot(aes(as.factor(weak_foot),shooting))+geom_boxplot()+
+  labs(x="weak_foot out of 5",y="shooting score out of 100",
+       title = "Boxplot of weak foot vs shooting")
+# Strength of correlation:
+cor(fifa20$weak_foot, fifa20$shooting, method = "spearman",
+    use = "complete.obs")
+# Weak positive correlation
+```
+
+```{r}
+# Split work rate into 2 columns: attack and defence work rate:
+fifa20 <- separate(fifa20, work_rate, into = c("attack_workrate","defence_workrate"),
+         sep = "/")
+# Good players with high attack and defence workrates:
+fifa20%>%filter(overall>=85,attack_workrate=="High",defence_workrate=="High")%>%
+  arrange(desc(overall))%>%
+  select(short_name, club, nationality, team_position,
+         attack_workrate, defence_workrate, overall)%>%group_by(overall)%>%
+  top_n(1)%>%ungroup()
+
+# Laziest players on fifa20
+fifa20%>%filter(attack_workrate=="Low",defence_workrate=="Low")%>%
+  arrange(desc(overall))%>%
+  select(short_name, club, nationality, team_position,
+         attack_workrate, defence_workrate, overall)%>%group_by(overall)%>%
+  top_n(1)%>%ungroup()
+```
+
+```{r}
+# SUMMARIES OF FEW COLUMNS
+sum_stats <- fifa20 %>% select(overall, potential, value_eur, wage_eur,
+                               release_clause_eur,
+                    pace, shooting, passing,
+                   dribbling, physic, defending)
+summary(sum_stats)
+
+#release_clause_eur is NA for 1298 players, this is because these players do not 
+#have a release clause inlcuded in their current contract.
+
+#pace, shooting, passing, dribbling, defending and physic is NA for 2036 players,
+#lets find out why
+pace_na <- fifa20 %>% filter(is.na(pace),is.na(dribbling),is.na(shooting),
+                             is.na(passing),is.na(defending),is.na(physic)) %>%
+  select(short_name, club, nationality, team_position, overall)
+dim(pace_na) #2036 players with NAs.
+#team positions of these players:
+unique(pace_na$team_position)
+#We can see that goalkeepers, subs and reserve team players do not have 
+#values for these 6 attributes.
+pace_na %>% filter(team_position=="")
+#There are 40 rows in this dataframe where the position is "". These players
+#are fictional and do not belong to any club.
+```
+
+```{r}
+# RELEASE CLAUSE EDA
+# Players with the highest release clauses in euros:
+fifa20 %>% arrange(desc(release_clause_eur)) %>%
+  select(short_name, club, nationality, overall, wage_eur, 
+         value_eur, release_clause_eur)
+# Messi and Neymar have the highest release clauses in euros
+
+# Are value and release clause correlated?
+cor(fifa20$value_eur, fifa20$release_clause_eur, method = "pearson",
+    use = "complete.obs")
+# We see that value and release clause have very high positive correlation,
+# correlation coeeficient almost equal to 1.
+
+# Are wage and release clause correlated?
+cor(fifa20$wage_eur, fifa20$release_clause_eur, method = "pearson",
+    use = "complete.obs")
+# We also see that wage and release clause have high positive correlation.
+
+# Do talented young players have high release clauses?
+elite_young <- fifa20 %>% filter(age <= 23)%>%
+  mutate(elite_pot_inc = potential-overall)%>%
+  select(short_name, club, nationality, overall, potential, 
+         elite_pot_inc, release_clause_eur) %>%
+  arrange(desc(elite_pot_inc))
+elite_young
+# Check if 'elite_pot_inc' and 'release_clause_eur' are correlated
+cor(elite_young$elite_pot_inc, elite_young$release_clause_eur,
+    method = "pearson",use = "complete.obs")
+# They have a low negative correlation. One would expect, higher possibility of
+# increase in overall would result in the player having a bigger release clause
+# but that is not the case here.
+
+# Do older players have smaller release clauses?
+cor(fifa20$age, fifa20$release_clause_eur, method = "pearson",
+    use = "complete.obs")
+# There is negligable correlation between these 2 variables which is surprising.
+```
+
+```{r}
+# Correlation for attack, goalkeeping, defending and power stats
+
+# ATTACK STATS:
+attack_stats <- fifa20%>% select(shooting, passing, attacking_crossing,
+                                 attacking_finishing, attacking_heading_accuracy,
+                                 attacking_short_passing, attacking_volleys)
+source("http://www.sthda.com/upload/rquery_cormat.r")
+require("corrplot")
+rquery.cormat(attack_stats)
+#Almost all pairs are positively correlated to each other.
+#One exception is the correlation b/w heading and crossing. There is a -ve 
+#correlation b/w these 2 variables and it makes sense since a good crosser of the
+#ball is the one delivering the crosses to the player whos good at heading.
+
+
+# GOALKEEPING STATS:
+gk_stats <- fifa20%>% filter(team_position=="GK")%>%
+  select(overall, goalkeeping_diving, goalkeeping_handling,goalkeeping_kicking,
+         goalkeeping_positioning, goalkeeping_reflexes)
+source("http://www.sthda.com/upload/rquery_cormat.r")
+require("corrplot")
+rquery.cormat(gk_stats)
+#kicking is not as highly correlated to GK overall when compapred to 
+#other goalkeeping attributes.
+
+
+# DEFENDING STATS:
+defence_stats <- fifa20%>% select(defending, defending_marking,
+                                  defending_standing_tackle, defending_sliding_tackle,
+                                  physic)
+source("http://www.sthda.com/upload/rquery_cormat.r")
+require("corrplot")
+rquery.cormat(defence_stats)
+#Though physique is not highly correlated to defence stats, having a high
+#physique rating out of 100 implies that the player is good at defending.
+
+
+# POWER STATS:
+power_stats <- fifa20%>%select(physic, power_shot_power, power_jumping,
+                               power_stamina, power_strength, power_long_shots)
+source("http://www.sthda.com/upload/rquery_cormat.r")
+require("corrplot")
+rquery.cormat(power_stats)
+#long shots and sho power have high +ve correlation which makes sense
+#power strength and physique have high +ve correlation too which makes sense.
+
+```
+
+```{r}
+# INTERCEPTIONS AND DEFENDING:
+cor(fifa20$defending, fifa20$mentality_interceptions, method = "pearson",
+    use = "complete.obs")
+# Very high +ve correlation
+
+# INTERCEPTIONS FOR DEFNSIVE MIDS, WING BACKS AND CENTRE BACKS:
+
+# DEFENSIVE MIDS:
+mid_int_def <- fifa20%>%filter(team_position %in% c("CDM","LDM","RCM","LCM","CM"))
+cor(mid_int_def$defending, mid_int_def$mentality_interceptions)
+# Very high positive correlation(.93)
+
+# WING BACKS:
+wb_int_def <- fifa20%>%filter(team_position %in% c("LB","RB","LWB","RWB"))
+cor(wb_int_def$defending, wb_int_def$mentality_interceptions)
+
+# CENTRE BACKS:
+cb_int_def <- fifa20%>%filter(team_position %in% c("LCB","RCB"))
+cor(cb_int_def$defending, cb_int_def$mentality_interceptions)
+# Mid way between defensive mids and wingbacks
+```
+```{r}
+# POSITIONING AND FINISHING:
+cor(fifa20$mentality_positioning, fifa20$attacking_finishing, method = "pearson",
+    use = "complete.obs")
+# Very high positive correlation.
+```
+
+```{r}
+# STANDING TACKLING AND DEFENDING
+
+# STANDING TACKLING FOR DEFNSIVE MIDS, WING BACKS AND CENTRE BACKS:
+
+# DEFENSIVE MIDS:
+mid_sttack_def <- fifa20%>%filter(team_position %in% c("CDM","LDM","RCM","LCM","CM"))
+cor(mid_sttack_def$defending, mid_sttack_def$defending_standing_tackle)
+# Very high positive correlation(.95)
+
+# WING BACKS:
+wb_sttack_def <- fifa20%>%filter(team_position %in% c("LB","RB","LWB","RWB"))
+cor(wb_sttack_def$defending, wb_sttack_def$defending_standing_tackle)
+
+# CENTRE BACKS:
+cb_sttack_def <- fifa20%>%filter(team_position %in% c("LCB","RCB"))
+cor(cb_sttack_def$defending, cb_sttack_def$defending_standing_tackle)
+```
+
+```{r}
+# VISION AND PASSING:
+cor(fifa20$passing, fifa20$mentality_vision, method = "pearson",
+    use = "complete.obs")
+# Very high +ve correlation.
+
+
+# FINISHING AND PENALTIES:
+cor(fifa20$attacking_finishing, fifa20$mentality_penalties, method = "pearson",
+    use = "complete.obs")
+# Very high +ve correlation.
+```
+
+# DIFFERENCES BETWEEN FORWARD LINE, MIDFIELD AND DEFENCE:
+```{r}
+# PACE
+
+# Wingers:
+fifa20 %>% filter(team_position %in% c("RW","LW")) %>% 
+  summarise(avg_pace = mean(pace))   #78.6
+
+# Strikers and forwards:
+fifa20 %>% filter(team_position %in% c("ST","CF","LS","RS","RF","LF")) %>% 
+  summarise(avg_pace = mean(pace))   #70.4
+
+# Attacking mids:
+fifa20 %>% filter(team_position %in% c("CAM","RM","LM","RAM","LAM")) %>% 
+  summarise(avg_pace = mean(pace))   #75.9
+
+# Defensive mids:
+fifa20 %>% filter(team_position %in% c("RCM","CDM","LDM","LCM","RDM","CM")) %>% 
+  summarise(avg_pace = mean(pace))   #64.7
+
+# Wing backs:
+fifa20 %>% filter(team_position %in% c("RB","LB","LWB","RWB")) %>% 
+  summarise(avg_pace = mean(pace))   #73.7
+
+# Centre backs:
+fifa20 %>% filter(team_position %in% c("RCB","LCB","CB")) %>% 
+  summarise(avg_pace = mean(pace))   #57.5
+
+# Wingers are the fastest and cbs are the slowest.
+
+```
+
+```{r}
+# SHOOTING:
+
+# Wingers:
+fifa20 %>% filter(team_position %in% c("RW","LW")) %>% 
+  summarise(avg_shooting = mean(shooting))   #65.7
+
+#Strikers and forwards:
+fifa20 %>% filter(team_position %in% c("ST","CF","LS","RS","RF","LF")) %>% 
+  summarise(avg_shooting = mean(shooting))   #68.6
+
+#Attacking mids:
+fifa20 %>% filter(team_position %in% c("CAM","RM","LM","RAM","LAM")) %>% 
+  summarise(avg_shooting = mean(shooting))   #63.1
+
+#Defensive mids:
+fifa20 %>% filter(team_position %in% c("RCM","CDM","LDM","LCM","RDM","CM")) %>% 
+  summarise(avg_shooting = mean(shooting))   #57.8
+
+#Wing backs:
+fifa20 %>% filter(team_position %in% c("RB","LB","LWB","RWB")) %>% 
+  summarise(avg_shooting = mean(shooting))   #47.8
+
+#Centre backs:
+fifa20 %>% filter(team_position %in% c("RCB","LCB","CB")) %>% 
+  summarise(avg_shooting = mean(shooting))   #38.3
+
+# Strikers have the best shooting and centre backs have the worst shooting.
+```
+
+```{r}
+# PASSING
+
+# Wingers:
+fifa20 %>% filter(team_position %in% c("RW","LW")) %>% 
+  summarise(avg_passing = mean(passing))   #63.8
+
+# Strikers and forwards:
+fifa20 %>% filter(team_position %in% c("ST","CF","LS","RS","RF","LF")) %>% 
+  summarise(avg_passing = mean(passing))   #57.6
+
+# Attacking mids:
+fifa20 %>% filter(team_position %in% c("CAM","RM","LM","RAM","LAM")) %>% 
+  summarise(avg_passing = mean(passing))   #64.9
+
+# Defensive mids:
+fifa20 %>% filter(team_position %in% c("RCM","CDM","LDM","LCM","RDM","CM")) %>% 
+  summarise(avg_passing = mean(passing))   #65.5
+
+# Wing backs:
+fifa20 %>% filter(team_position %in% c("RB","LB","LWB","RWB")) %>% 
+  summarise(avg_passing = mean(passing))   #60.6
+
+# Centre backs:
+fifa20 %>% filter(team_position %in% c("RCB","LCB","CB")) %>% 
+  summarise(avg_passing = mean(passing))   #50.8
+
+# Defensive mids have the best passing and centre backs have the worst passing.
+
+```
+
+```{r}
+# DRIBBLING
+
+# Wingers
+fifa20 %>% filter(team_position %in% c("RW","LW")) %>% 
+  summarise(avg_dribbling = mean(dribbling))   #72.3
+
+# Strikers and forwards:
+fifa20 %>% filter(team_position %in% c("ST","CF","LS","RS","RF","LF")) %>% 
+  summarise(avg_dribbling = mean(dribbling))   #67.7
+
+# Attacking mids:
+fifa20 %>% filter(team_position %in% c("CAM","RM","LM","RAM","LAM")) %>% 
+  summarise(avg_dribbling = mean(dribbling))   #71.1
+
+# Defensive mids:
+fifa20 %>% filter(team_position %in% c("RCM","CDM","LDM","LCM","RDM","CM")) %>% 
+  summarise(avg_dribbling = mean(dribbling))   #67.3
+
+# Wing backs:
+fifa20 %>% filter(team_position %in% c("RB","LB","LWB","RWB")) %>% 
+  summarise(avg_dribbling = mean(dribbling))   #65.3
+
+# Centre backs:
+fifa20 %>% filter(team_position %in% c("RCB","LCB","CB")) %>% 
+  summarise(avg_dribbling = mean(dribbling))   #51.9
+
+#Wingers have the best dribbling and centre backs have the worst dribbling.
+
+```
+
+```{r}
+# DEFENDING
+
+# Wingers
+fifa20 %>% filter(team_position %in% c("RW","LW")) %>% 
+  summarise(avg_defending = mean(defending))   #37.0
+
+# Strikers and forwards:
+fifa20 %>% filter(team_position %in% c("ST","CF","LS","RS","RF","LF")) %>% 
+  summarise(avg_defending = mean(defending))   #33.4
+
+# Attacking mids:
+fifa20 %>% filter(team_position %in% c("CAM","RM","LM","RAM","LAM")) %>% 
+  summarise(avg_defending = mean(defending))  #42.6
+
+# Defensive mids:
+fifa20 %>% filter(team_position %in% c("RCM","CDM","LDM","LCM","RDM","CM")) %>% 
+  summarise(avg_defending = mean(defending))   #61.8
+
+# Wing backs:
+fifa20 %>% filter(team_position %in% c("RB","LB","LWB","RWB")) %>% 
+  summarise(avg_defending = mean(defending))   #64.3
+
+# Centre backs:
+fifa20 %>% filter(team_position %in% c("RCB","LCB","CB")) %>% 
+  summarise(avg_defending = mean(defending))   #68.4
+
+# Centre backs have the best defense and forwards/strikers have the worst defense.
+
+```
+
+```{r}
+# PHYSIC
+
+# Wingers
+fifa20 %>% filter(team_position %in% c("RW","LW")) %>% 
+  summarise(avg_physic = mean(physic))   #61.5
+
+# Strikers and forwards:
+fifa20 %>% filter(team_position %in% c("ST","CF","LS","RS","RF","LF")) %>% 
+  summarise(avg_physic = mean(physic))   #68.9
+
+# Attacking mids:
+fifa20 %>% filter(team_position %in% c("CAM","RM","LM","RAM","LAM")) %>% 
+  summarise(avg_physic = mean(physic)) #61.6
+
+# Defensive mids:
+fifa20 %>% filter(team_position %in% c("RCM","CDM","LDM","LCM","RDM","CM")) %>% 
+  summarise(avg_physic = mean(physic))  #69.4
+
+# Wing backs:
+fifa20 %>% filter(team_position %in% c("RB","LB","LWB","RWB")) %>% 
+  summarise(avg_physic = mean(physic))  #68.5
+
+# Centre backs:
+fifa20 %>% filter(team_position %in% c("RCB","LCB","CB")) %>% 
+  summarise(avg_physic = mean(physic))  #73.6
+
+# Centre backs have the best physic and wingers/attacking mids have the worst physic.
+```
+
+```{r}
+
+# Very good players who are slow:
+good_slow <- fifa20 %>% filter(overall >= 85) %>%
+  arrange(pace) %>%
+  select(short_name, club, team_position, overall, pace)
+head(good_slow, 5)
+
+# Very fast players who are bad overall
+fast_bad <- fifa20 %>% filter(overall <= 70) %>%
+  arrange(desc(pace))%>%
+  select(short_name, club, team_position, overall, pace)
+head(fast_bad, 5)
+
+# Good players who are physically weak:
+good_weak <- fifa20 %>% filter(overall >= 85) %>%
+  arrange(physic)%>%
+  select(short_name, club, team_position, overall, physic)
+head(good_weak, 5)
+
+# Strong players who are bad overall:
+strong_bad <- fifa20 %>% filter(overall <= 70) %>%
+  arrange(desc(physic))%>%
+  select(short_name, club, team_position, overall, physic)
+head(strong_bad, 5)
+```
+
+```{r}
+# Centre backs attack the goal during set pieces to chip in with headers
+
+# Which centre backs are good at attacking the goal with their heads?
+fifa20 %>% filter(team_position %in% c("LCB","RCB","CB"))%>%
+  arrange(desc(attacking_heading_accuracy)) %>%
+  select(short_name, club, overall, attacking_heading_accuracy) %>% top_n(1)
+# Sergio Ramos expected.
+
+
+# Wing backs overlap with the wingers while attacking to deliver key crosses into the box
+
+# Which wing/full backs are the best crossers?
+fifa20 %>% filter(team_position %in% c("RB","RWB","LWB","LB")) %>%
+  arrange(desc(attacking_crossing)) %>%
+  select(short_name, club, overall, attacking_crossing) %>% top_n(1)
+#Joshua Kimmich expected.
+
+```
+
+```{r}
+# Wingers who are very good crossers:
+fifa20 %>% filter(team_position %in% c("RW","LW")) %>%
+  arrange(desc(attacking_crossing)) %>%
+  select(short_name, club, overall, attacking_crossing) %>% top_n(5)
+```
+
+```{r}
+#T arget men are strikers who are tall, strong and good at heading.
+# Best target men:
+fifa20 %>% filter(height_cm >= 180, physic >= 75)%>%
+  filter(team_position %in% c("ST","CF","LS","RS","RF","LF","SUB")) %>%
+  arrange(desc(attacking_heading_accuracy)) %>%
+  select(short_name, club, overall, attacking_heading_accuracy) %>% top_n(5)
+```
+
+```{r}
+# Very good players who are poor at penalties: cxcluding fbs, wbs, cbs, gks and subs
+# since they dont generally take penalties
+
+fifa20 %>% filter(overall >=85) %>%
+  filter(!team_position %in% c("RB","RWB","LWB","LB","GK","LCB","RCB","CB","SUB"))%>%
+  arrange(mentality_penalties) %>%
+  select(short_name, club, overall, mentality_penalties) %>% top_n(5)
+```
+
+```{r}
+# Wingers who cut in and shoot to score goals: 
+
+# They are false wingers: right wingers with preferred foot as 
+# left and have good shooting and vice versa
+
+fifa20 %>% filter(team_position=="RW", preferred_foot=="Left")%>%
+  arrange(desc(shooting))%>%
+  select(short_name, club, shooting, overall) %>% top_n(1)
+
+fifa20 %>% filter(team_position=="LW", preferred_foot=="Right")%>%
+  arrange(desc(shooting))%>%
+  select(short_name, club, shooting, overall) %>% top_n(1)
+
+```
+
+# COMPARISON BETWEEN MESSI AND RONALDO: MAJOR STATS OUT OF 100
+```{r}
+#BASIC STATS:
+messi_ronaldo_basic <- fifa20 %>% 
+  filter(short_name =="L. Messi" | short_name=="Cristiano Ronaldo") %>%
+  select(age, height_cm, weight_kg, overall, value_eur, wage_eur, release_clause_eur,
+         international_reputation, weak_foot, skill_moves)
+
+# 6 MAIN ATTRIBUTES:
+messi_ronaldo_6main <- fifa20 %>% 
+  filter(short_name =="L. Messi" | short_name=="Cristiano Ronaldo") %>%
+  select(pace, shooting, passing, dribbling, defending, physic)
+
+# ATTACK ATTRIBUTES:
+messi_ronaldo_attack <- fifa20 %>% 
+  filter(short_name =="L. Messi" | short_name=="Cristiano Ronaldo") %>%
+  select(attacking_crossing, attacking_finishing, attacking_heading_accuracy,
+         attacking_short_passing, attacking_volleys)
+
+# MOVEMENT ATTRIBUTES:
+messi_ronaldo_move <- fifa20 %>% 
+  filter(short_name =="L. Messi" | short_name=="Cristiano Ronaldo") %>%
+  select(movement_acceleration, movement_sprint_speed, movement_agility,
+         movement_reactions, movement_balance)
+
+# POWER ATTRIBUTES:
+messi_ronaldo_power <- fifa20 %>% 
+  filter(short_name =="L. Messi" | short_name=="Cristiano Ronaldo") %>%
+  select(power_shot_power, power_jumping, power_stamina,
+         power_strength, power_long_shots)
+
+# DEFENSE ATTRIBUTES:
+messi_ronaldo_def <- fifa20 %>% 
+  filter(short_name =="L. Messi" | short_name=="Cristiano Ronaldo") %>%
+  select(defending_marking, defending_standing_tackle, defending_sliding_tackle)
+
+# MENTALITY ATTRIBUTES:
+messi_ronaldo_ment <- fifa20 %>% 
+  filter(short_name =="L. Messi" | short_name=="Cristiano Ronaldo") %>%
+  select(mentality_aggression, mentality_interceptions, mentality_positioning, 
+         mentality_penalties, mentality_vision, mentality_composure)
+
+# Difference in basic stats:
+diff_basic <- data.frame(diff(as.matrix(messi_ronaldo_basic)))
+diff_basic
+
+# Difference in 6 main attributes:
+diff_6main <- data.frame(diff(as.matrix(messi_ronaldo_6main)))
+diff_6main
+
+# Difference in attack attributes:
+diff_attack <- data.frame(diff(as.matrix(messi_ronaldo_attack)))
+diff_attack
+
+# Difference in movement attributes:
+diff_move <- data.frame(diff(as.matrix(messi_ronaldo_move)))
+diff_move
+
+# Difference in defence attributes:
+diff_def <- data.frame(diff(as.matrix(messi_ronaldo_def)))
+diff_def
+
+# Difference in power attributes:
+diff_power <- data.frame(diff(as.matrix(messi_ronaldo_power)))
+diff_power
+
+# Difference in mentality attributes:
+diff_ment <- data.frame(diff(as.matrix(messi_ronaldo_ment)))
+diff_ment
+
+# These are the differences between messi and ronaldo. 
+# Who has got the best overall stats?
+
+total_diff <- bind_cols(diff_6main, diff_attack, diff_def, diff_ment, 
+          diff_move, diff_power)
+total_diff
+
+# Adding values across columns:
+sum <- 0
+for (i in 1:length(total_diff)) 
+{
+ sum <- sum + total_diff[[i]] 
+}
+print(sum)
+
+# OVERALL RONALDO LEADS MESSI BY 20 POINTS IN NUMERIC STATS.
+```
+
