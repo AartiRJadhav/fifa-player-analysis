@@ -1,7 +1,5 @@
-# FIFA Player Analysis and Modeling
-#### Authors - Akshit Jain, Naga Santhosh Kartheek Karnati, Praharsha Singaraju and Thomas Lindstrom-Vautrin
 
-FIFA Player Assessment Model and Analytics, DS5220 Project.
+#### FIFA Player Assessment Model and Analytics
 <p>Sports analytics is a field that is growing in popularity and application throughout the world. One
 of the open problems in this field is the assessment of football players based on their skills, physical
 attributes and market value. The primary aim of this project is to establish football player assessment
