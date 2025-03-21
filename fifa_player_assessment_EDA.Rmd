@@ -1,6 +1,6 @@
 ---
 title: 'DS5220: FIFA Player Assessment Model and Analytics'
-author: "Akshit Jain, Naga Santhosh Kartheek Karnati, Praharsha Singaraju, Thomas Lindstrom-Vautrin"
+author: "Aarti Jadhav"
 date: "3/25/2020"
 output: pdf_document
 ---
