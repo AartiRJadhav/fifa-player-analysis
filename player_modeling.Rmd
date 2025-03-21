@@ -1,7 +1,7 @@
 ---
 title: "FIFA 20 Predicting Player Value + Work-Rate"
-author: "Akshit Jain"
-date: "3/28/2020"
+author: "Aarti Jadhav"
+date: "09/09/2022"
 output: pdf_document
 ---
 
